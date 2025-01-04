@@ -1,14 +1,21 @@
 import sys
 import os
 import yt_dlp
+import ssl
+import requests
+from pytube import YouTube, Playlist
+from pytube.innertube import InnerTube
 
 # Set UTF-8 encoding for console output
 if sys.platform.startswith('win'):
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 
-# Set path to ffmpeg
-FFMPEG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ffmpeg', 'ffmpeg-master-latest-win64-gpl', 'bin', 'ffmpeg.exe')
+# Monkey patch the requests session to disable SSL verification
+InnerTube._default_clients = None
+session = requests.Session()
+session.verify = False
+requests.packages.urllib3.disable_warnings()
 
 class DownloadStats:
     def __init__(self):
@@ -88,6 +95,43 @@ def file_exists_in_directory(directory, video_title):
         print(f"Warning: Error checking file existence: {str(e)}")
         return False
 
+def create_ssl_context():
+    """Create a custom SSL context that's more permissive"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+def download_with_pytube(url, output_path, stats):
+    """Download video using pytube as a fallback"""
+    try:
+        # Create custom SSL context
+        ssl_context = create_ssl_context()
+        yt = YouTube(url, use_oauth=False, allow_oauth_cache=False)
+        
+        # Monkey patch the SSL context
+        yt.stream_monostate._ssl_context = ssl_context
+        
+        video_id = yt.video_id
+        video_title = yt.title
+        
+        if file_exists_in_directory(output_path, video_title):
+            print(f"Video already exists: {video_title}")
+            stats.add_skipped(video_id, "File already exists")
+            return
+
+        # Get the highest resolution stream that includes both video and audio
+        stream = yt.streams.get_highest_resolution()
+        
+        # Download the video
+        print(f"Downloading: {video_title}")
+        stream.download(output_path=output_path)
+        stats.add_success(video_id, video_title)
+        print(f"Successfully downloaded: {video_title}")
+        
+    except Exception as e:
+        stats.add_failure(url, f"Pytube error: {str(e)}")
+
 def download_video(url, output_path, stats):
     try:
         ydl_opts = {
@@ -106,13 +150,13 @@ def download_video(url, output_path, stats):
             try:
                 info = ydl.extract_info(url, download=False)
                 if info is None:
-                    stats.add_failure(url, "Video information could not be extracted")
+                    print("Falling back to pytube...")
+                    download_with_pytube(url, output_path, stats)
                     return
 
                 video_id = info.get('id', 'NA')
                 video_title = info.get('title', 'NA')
                 
-                # Check if file already exists using the improved function
                 if file_exists_in_directory(output_path, video_title):
                     print(f"Video already exists: {video_title}")
                     stats.add_skipped(video_id, "File already exists")
@@ -123,14 +167,14 @@ def download_video(url, output_path, stats):
                 stats.add_success(video_id, video_title)
                 
             except yt_dlp.utils.DownloadError as e:
-                error_message = str(e)
-                if "Video unavailable" in error_message:
-                    stats.add_failure(url, "Video unavailable")
-                else:
-                    stats.add_failure(url, f"Download error: {error_message}")
+                print(f"yt-dlp failed: {str(e)}")
+                print("Falling back to pytube...")
+                download_with_pytube(url, output_path, stats)
                 
     except Exception as e:
-        stats.add_failure(url, f"Unexpected error: {str(e)}")
+        print(f"yt-dlp failed: {str(e)}")
+        print("Falling back to pytube...")
+        download_with_pytube(url, output_path, stats)
 
 def process_url(url):
     print("YouTube Video/Playlist Downloader")
@@ -144,42 +188,65 @@ def process_url(url):
         # Initialize download stats
         stats = DownloadStats()
 
-        with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
-            result = ydl.extract_info(url, download=False)
-            
-            if result is None:
-                print("Error: Could not extract video/playlist information")
-                return
-
-            if 'entries' in result:  # It's a playlist
-                print("Detected playlist URL")
-                print("Fetching playlist information...")
+        # Check if it's a playlist
+        if 'playlist' in url:
+            try:
+                print("Attempting to download playlist...")
+                # Try using yt-dlp first
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+                        result = ydl.extract_info(url, download=False)
+                        if result and 'entries' in result:
+                            playlist_title = sanitize_filename(result.get('title', 'Playlist'))
+                            playlist_dir = os.path.join(downloads_dir, playlist_title)
+                            os.makedirs(playlist_dir, exist_ok=True)
+                            
+                            entries = list(result['entries'])
+                            total_videos = len(entries)
+                            print(f"\nDownloading playlist: {playlist_title}")
+                            print(f"Found {total_videos} videos")
+                            
+                            for index, entry in enumerate(entries, 1):
+                                if entry:
+                                    video_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                                    print(f"\nProcessing video {index}/{total_videos}")
+                                    download_video(video_url, playlist_dir, stats)
+                                else:
+                                    print(f"Skipping video {index} - no information available")
+                            
+                            print(f"\nPlaylist download completed! Videos saved in: {playlist_dir}")
+                            return
+                except Exception as e:
+                    print(f"yt-dlp failed: {str(e)}")
+                    print("Trying pytube...")
                 
-                playlist_title = result.get('title', 'Playlist')
+                # Fallback to pytube
+                playlist = Playlist(url)
+                playlist_title = sanitize_filename(playlist.title)
                 playlist_dir = os.path.join(downloads_dir, playlist_title)
                 os.makedirs(playlist_dir, exist_ok=True)
                 
-                entries = list(result['entries'])
-                total_videos = len(entries)
-                print(f"\nDownloading playlist: {playlist_title}")
+                print(f"\nDownloading playlist: {playlist.title}")
+                video_urls = playlist.video_urls
+                total_videos = len(video_urls)
+                print(f"Found {total_videos} videos in playlist")
                 
-                for index, entry in enumerate(entries, 1):
-                    if entry:
-                        video_url = entry['url']
-                        print(f"\nProcessing video {index}/{total_videos}")
-                        download_video(video_url, playlist_dir, stats)
-                    else:
-                        stats.add_failure(f"Video #{index}", "Entry information missing")
+                for index, video_url in enumerate(video_urls, 1):
+                    print(f"\nProcessing video {index}/{total_videos}")
+                    download_video(video_url, playlist_dir, stats)
                 
                 print(f"\nPlaylist download completed! Videos saved in: {playlist_dir}")
-                
-            else:  # Single video
-                print("Detected single video URL")
-                download_video(url, downloads_dir, stats)
-                print(f"\nVideo download completed! Video saved in: {downloads_dir}")
+            except Exception as e:
+                print(f"Error processing playlist: {str(e)}")
+                stats.add_failure(url, f"Playlist processing error: {str(e)}")
+        else:
+            # Single video
+            print("Detected single video URL")
+            download_video(url, downloads_dir, stats)
+            print(f"\nVideo download completed! Video saved in: {downloads_dir}")
 
-            # Print download statistics
-            stats.print_summary()
+        # Print download statistics
+        stats.print_summary()
 
     except Exception as e:
         print(f"An error occurred: {str(e)}")

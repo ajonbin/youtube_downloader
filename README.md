@@ -24,27 +24,33 @@ A Python script to download YouTube videos and playlists in high quality using y
 ## Installation
 
 1. Clone this repository:
-   ```
-   git clone <repository-url>
+   ```bash
+   git clone https://github.com/ajonbin/youtube_downloader.git
    cd youtube_downloader
    ```
 
-2. Install the required Python packages:
-   ```
-   pip install -r requirements.txt
+2. Create and activate virtual environment:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Linux/Mac
+   # or
+   .\venv\Scripts\activate  # On Windows
    ```
 
-3. FFmpeg is included in the repository under the `ffmpeg` directory, no additional installation needed.
+3. Install the required Python packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
 1. Download a single video:
-   ```
+   ```bash
    python youtube_downloader.py https://www.youtube.com/watch?v=VIDEO_ID
    ```
 
 2. Download an entire playlist:
-   ```
+   ```bash
    python youtube_downloader.py https://www.youtube.com/playlist?list=PLAYLIST_ID
    ```
 
@@ -90,6 +96,59 @@ downloads/
     ├── video2_title.mp4
     └── ...
 ```
+
+## Troubleshooting
+
+### SSL Issues
+If you encounter SSL errors like:
+```
+[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1007)
+```
+
+This can happen due to:
+- Network instability
+- Proxy interference
+- SSL certificate verification issues
+- Server-side connection limits
+
+The script handles these issues automatically through:
+1. Multiple retry attempts
+2. Fallback to alternative download methods
+3. Custom SSL context handling
+4. Automatic recovery mechanisms
+
+If you still experience issues, you can try:
+1. Check your network connection
+2. Configure your proxy settings if using one
+3. Update your SSL certificates
+4. Try downloading with a different network connection
+
+### Common Issues
+
+1. **Video Unavailable**
+   - The video might be private or deleted
+   - Region restrictions might apply
+   - Try using a VPN if region-restricted
+
+2. **Download Speed Issues**
+   - Check your internet connection
+   - Try during off-peak hours
+   - Consider using a different network
+
+3. **File Format Issues**
+   - The script automatically handles format conversion
+   - FFmpeg is required for some conversions
+   - Check if FFmpeg is properly installed
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes:
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## License
 
